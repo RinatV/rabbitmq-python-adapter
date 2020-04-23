@@ -1,3 +1,10 @@
+---
+title: Rabbitmq тесты на Python
+keywords: python,rabbitmq,code
+weblogName: Weblog (medium)
+postDate: 2020-04-23T17:56:15.5616734+05:00
+postStatus: draft
+---
 # Rabbitmq тесты на Python
 
 Изначально я просто хотел сделать перевод статьи [Connecting Python with RabbitMQ](https://medium.com/@odelucca/recommendation-algorithm-using-python-and-rabbitmq-part-2-connecting-with-rabbitmq-aa0ec933e195)
@@ -47,6 +54,7 @@
 
 Добавьте в тесты файл `tests/test_integration.py`:
 
+```python
     def test_rabbitmq_factory():
         # Должно быть в состоянии создать соединение RabbitMQ
         assert True
@@ -62,6 +70,7 @@
     def test_rabbitmq_send_message():
         # Должен быть в состоянии отправить сообщение в заданной очереди
         assert True
+```
         
 В Pycharm надо настроить интеграцию, во вкладке [`File | Settings | Tools | Python Integrated Tools`](jetbrains://Python/settings?name=Tools--Python+Integrated+Tools)
 , в параграфе *Testing* надо параметр *Default test runner* выбрать *pytest*. Если pytest
@@ -80,6 +89,7 @@
 Теперь напишем юнит-тест, т.е. тест который проверяет внутренний код разрабатываемого
 пакета `tests/test_channel.py``:
 
+```python
     import pytest
     import rabbitmq_adapter
     import sys
@@ -110,12 +120,14 @@
         rabbitmq_adapter.channel.create('MORTY HOST')
     
         mocked_pika.BlockingConnection.assert_called_once_with('MORTY')    
+```
     
 С помощью mockов - заглушек проверяется взаимодействие тестируемого кода
 с используемыми интерфейсами, для этого нет необходимости знать внутреннее устройство
 реализаций интерфейса, а достаточно проверять контракт. Остается разработать наш 
 класс адаптер `rabbitmq_adapter/channel.py`:
 
+```python
     import pika
     
     def create(host):
@@ -123,6 +135,7 @@
         # connection = pika.BlockingConnection(params)
     
         # return connection.channel()
+```
 
 Первая строка метода `create` проверяется тестом `test_channel_sets_parameters(monkeypatch)`,
 следующая строка вторым юнит-тестом, возвращаемый объект видимо пригодится уже в 
@@ -135,6 +148,7 @@
 
 Зарядим первый интеграционный тест:
 
+```python
     import pytest
     import rabbitmq_adapter
     import sys
@@ -200,9 +214,11 @@
     def test_rabbitmq_send_message():
         # Should be able to send a message in a given queue
         assert True
-     
+``` 
+    
 Пока файл `config/config.py` пустой Pycharm на это будет ругаться, заполним файл:
 
+```python
     import os
     import yaml
     from pathlib import Path
@@ -214,10 +230,12 @@
     
     config_files = [os.path.join(r, file) for r, d, f in os.walk(os.environ['CONFIG']) for file in f if '.yaml' in file]
     config = DotMap({Path(cfg).stem: load_only_current_env(open(cfg, 'r')) for cfg in config_files})
+```
 
 Вот сейчас нам становиться нужна переменная среды `CONFIG, для этого заведем файл 
 `pytest.ini`
 
+```
     [pytest]
     markers =
       integration
@@ -225,20 +243,23 @@
     env =
       ENV=test
       CONFIG={PWD}/config/
-  
+```
+
  Сейчас уже становится нужным переменная среды `PWD`, его конечно можно заменить в
  конфигурационном файле `CONFIG=../config/` будет работать, я же его прописал
  в конфигурацию запуска тестов Pycharm `PWD=..`.
  
  Чтобы тесты могли видеть настройки для соединения с сервером заполним файл
  `rabbitmq.yaml`, rabbitmq у меня локальный:
- 
+
+```yaml 
     test:
       host: 'amqp://localhost'
       exchange: 'amq.direct'
       queue: 'TEST::NEW'
       prefetch:
         count: 1
+```
         
 После того как в файле `rabbitmq_adapter/channel.py` были раскоменченные все
 строки, интеграционный тест прошел. Если сервер остановить, то тест проваливается.
@@ -273,6 +294,7 @@
 
 Добавим модульный тест `tests\test_listener.py`:
 
+```python
     import pytest
     import rabbitmq_adapter
     import sys
@@ -329,9 +351,11 @@
             queue=config.rabbitmq.queue,
             on_message_callback=mocked_handler
         )
+```
 
 разрабатываемый функционал `rabbitmq_adapter\listener.py`:
 
+```python
     import sys
     import os
     
@@ -350,14 +374,18 @@
         channel.queue_bind(queue=queue, exchange=exchange)
         channel.basic_qos(prefetch_count=prefetch_count)
         channel.basic_consume(queue=queue, on_message_callback=handler)
+```
 
 Также надо уже настраивать импорты с разрабатываемого модуля `rabbitmq_adapter\__init__.py`:
 
+```python
     import rabbitmq_adapter.channel
     import rabbitmq_adapter.listener
+```
 
 В тестовую конфигурацию `config\rabbitmq.yaml` добавляется строка с параметром `durable`:
 
+```yaml
     test:
       host: 'amqp://localhost'
       exchange: 'amq.direct'
@@ -365,6 +393,7 @@
       durable: True
       prefetch:
         count: 1
+```
 
 И нам наконец становится нужным заглушка `tests\__mocks__\pika.py`, он начинает 
 приобретать неинтересные на момент тестирования части, если посмотреть на описанный
@@ -372,6 +401,7 @@
 при этом интересен только вызов одного метода интерфейса, хотя конечно можно было
 проверять все сразу:
 
+```python
     class Channel:
         def __init__(self): pass
         def exchange_declare(self): pass
@@ -386,6 +416,7 @@
     class Connection:
         def __init__(self): pass
         def channel(self): return Channel()
+```
         
 Обратите внимание на использование объекта `config` в по умолчанию параметрах 
 `listener.py`, насколько это удобно и практично. В простых приложениях наврняка
@@ -396,6 +427,7 @@
 
 Что же реализуем следующий интеграционный тест:
 
+```python
     ## .........
     @pytest.mark.integration
     def test_rabbitmq_listen_to_queue():
@@ -419,6 +451,7 @@
         wait_for_result(calls)
     
     ## .........
+```
 
 Все работает, этот тест очень похож на предыдущий, добавлен только `listener.subscribe`.
 Автор отметил новый пункт заслуг:
@@ -432,6 +465,7 @@
 ошибка, то ошибка будет на этой строке при несоответствии количества ответов. Привожу
 полностью оригинальный код:
 
+```python
     import pytest
     import rabbitmq_adapter
     import sys
@@ -543,6 +577,7 @@
     def test_rabbitmq_send_message():
         # Should be able to send a message in a given queue
         assert True 
+```
 
 Осталась последняя цель: Быть в состоянии отправить сообщение в заданную очередь
 
@@ -552,6 +587,7 @@
 >никакой магии, нам просто нужно вызвать функцию basic_publish в Pika с правильными параметрами. Вот наши 
 >юнит-тесты:
 
+```python
     import pytest
     import rabbitmq_adapter
     import sys
@@ -574,11 +610,12 @@
             exchange=config.rabbitmq.exchange,
             body='MORTY'
         )
+```
 
 Я составил свой вариант файла `rabbitmq_adapter\sender.py`:
 
+```python
     from config import *
-    
     
     def publish(
             channel,
@@ -587,18 +624,22 @@
             exchange=config.rabbitmq.exchange
     ):
         channel.basic_publish(routing_key=queue, exchange=exchange, body=body)
+```
 
 А также поменял мок интерфейс, подглядел вызов в интеграционных тестах 
 `tests\__mocks__\pika.py`:
 
+```python
     class Channel:
         # ...
         def basic_publish(self, routing_key, exchange, body): pass
         # ...
-    
+```
+
 Запустил юнит-тест, все сработало успешно. Дополнил последний интеграционный тест
 `tests\test_integration.py`:
 
+```python
     # ...
     @pytest.mark.integration
     def test_rabbitmq_send_message():
@@ -617,6 +658,7 @@
     
         rabbitmq_channel.start_consuming()
         wait_for_result(calls, expected)
+```
 
 Все работатет. В конце оригинальной статьи есть ссылка на гитхаб репозиторий,
 сверил 2 измененных мной файла, `channel.py` совпал, а вот в `pika.py` изменения
