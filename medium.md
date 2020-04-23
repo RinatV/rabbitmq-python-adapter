@@ -423,7 +423,7 @@
 Все работает, этот тест очень похож на предыдущий, добавлен только `listener.subscribe`.
 Автор отметил новый пункт заслуг:
 
-    Уметь слушать очередь, запускать функцию каждый раз, когда получает новое сообщение → (готово)
+>Уметь слушать очередь, запускать функцию каждый раз, когда получает новое сообщение → (готово)
     
 Далее надо описать еще один тест `test_rabbitmq_queue_one_to_many_queue_handler`, тут 
 я наконец понял для чего надо ждать в рекурсивной  функции `wait_for_result`, ранее
@@ -544,3 +544,82 @@
         # Should be able to send a message in a given queue
         assert True 
 
+Осталась последняя цель: Быть в состоянии отправить сообщение в заданную очередь
+
+Как пишет автор что в этом ничего сложного и приводит тесты.
+
+>Последняя часть этого модуля - создание скрипта для отправки сообщений на наш сервер RabbitMQ. Здесь нет 
+>никакой магии, нам просто нужно вызвать функцию basic_publish в Pika с правильными параметрами. Вот наши 
+>юнит-тесты:
+
+    import pytest
+    import rabbitmq_adapter
+    import sys
+    import os
+    from unittest.mock import Mock
+    from tests.__mocks__ import pika
+    
+    # sys.path.append(os.environ['CONFIG'])
+    from config import *
+    
+    @pytest.mark.unit
+    def test_sender_publish_new_message(monkeypatch):
+        channel = pika.Channel()
+        channel.basic_publish = Mock()
+    
+        rabbitmq_adapter.sender.publish(channel, 'MORTY')
+    
+        channel.basic_publish.assert_called_once_with(
+            routing_key=config.rabbitmq.queue,
+            exchange=config.rabbitmq.exchange,
+            body='MORTY'
+        )
+
+Я составил свой вариант файла `rabbitmq_adapter\sender.py`:
+
+    from config import *
+    
+    
+    def publish(
+            channel,
+            body,
+            queue=config.rabbitmq.queue,
+            exchange=config.rabbitmq.exchange
+    ):
+        channel.basic_publish(routing_key=queue, exchange=exchange, body=body)
+
+А также поменял мок интерфейс, подглядел вызов в интеграционных тестах 
+`tests\__mocks__\pika.py`:
+
+    class Channel:
+        # ...
+        def basic_publish(self, routing_key, exchange, body): pass
+        # ...
+    
+Запустил юнит-тест, все сработало успешно. Дополнил последний интеграционный тест
+`tests\test_integration.py`:
+
+    # ...
+    @pytest.mark.integration
+    def test_rabbitmq_send_message():
+        # Should be able to send a message in a given queue
+        calls = []
+        expected = ['MORTY']
+        rabbitmq_channel = rabbitmq_adapter.channel.create(config.rabbitmq.host)
+    
+        def mocked_handler(ch, method, props, body):
+            calls.append(body.decode('utf-8'))
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+            ch.close()
+    
+        rabbitmq_channel = setup_listener(rabbitmq_channel, mocked_handler)
+        rabbitmq_adapter.sender.publish(rabbitmq_channel, 'MORTY')
+    
+        rabbitmq_channel.start_consuming()
+        wait_for_result(calls, expected)
+
+Все работатет. В конце оригинальной статьи есть ссылка на гитхаб репозиторий,
+сверил 2 измененных мной файла, `channel.py` совпал, а вот в `pika.py` изменения
+не нужны.
+
+Надеюсь, вам понравилось. До скорого ;)

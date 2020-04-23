@@ -6,7 +6,7 @@ class Channel:
     def basic_qos(self, prefetch_count): pass
     def basic_consume(self, queue, on_message_callback): pass
     def start_consuming(self): pass
-    def basic_publish(self): pass
+    def basic_publish(self, routing_key, exchange, body): pass
     def basic_ack(self): pass
 
 class Connection:
