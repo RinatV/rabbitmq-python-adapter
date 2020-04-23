@@ -2,5 +2,6 @@ test:
   host: 'amqp://localhost'
   exchange: 'amq.direct'
   queue: 'TEST::NEW'
+  durable: True
   prefetch:
     count: 1
