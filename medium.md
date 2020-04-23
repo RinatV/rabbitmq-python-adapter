@@ -249,5 +249,180 @@
  * Можем проверить правильно ли используем интерфейсы
  * Каким-то образом устанавливаем соединение, на сервере появляется очередь `TEST:NEW`
 
-Посмотрим далее.
+Посмотрим далее, автор обозначает следующие цели:
+
+* Объявите очередь: это не интуитивно понятно, но мы можем 
+прослушивать только те очереди, которые уже созданы на нашем сервере. 
+Итак, если мы попытаемся прослушать несуществующую очередь, наш 
+скрипт выдаст ошибку.
+    
+* Привязать к очереди: для прослушивания очереди нам необходимо 
+связать эту очередь с обменом. Обмен - это в основном набор правил 
+для упорядочения сообщений между отправителями и получателями. 
+Существует четыре типа обмена: прямой, тематический, заголовки и 
+разветвление. Я не буду углубляться в это, но мы собираемся 
+использовать прямой обмен.
+
+* Задайте количество неподтвержденных сообщений: эта точка 
+указывается параметром basic_qos. Идея состоит в том, чтобы 
+установить, сколько сообщений служба получит от сервера RabbitMQ.
+
+* Начните потреблять новые сообщения: это действительно интуитивно 
+понятно, оно в основном начинает получать сообщения и отправлять их 
+в функцию-обработчик.
+
+Добавим модульный тест `tests\test_listener.py`:
+
+    import pytest
+    import rabbitmq_adapter
+    import sys
+    import os
+    from unittest.mock import Mock
+    from tests.__mocks__ import pika
+    
+    # sys.path.append(os.environ['CONFIG'])
+    from config import *
+    
+    def mocked_handler(): pass
+    
+    @pytest.mark.unit
+    def test_listener_subscribe_queue_declared(monkeypatch):
+        channel = pika.Channel()
+        channel.queue_declare = Mock()
+    
+        rabbitmq_adapter.listener.subscribe(channel, mocked_handler)
+    
+        channel.queue_declare.assert_called_once_with(
+            queue=config.rabbitmq.queue,
+            durable=True
+        )
+    
+    @pytest.mark.unit
+    def test_listener_subscribe_queue_bind(monkeypatch):
+        channel = pika.Channel()
+        channel.queue_bind = Mock()
+    
+        rabbitmq_adapter.listener.subscribe(channel, mocked_handler)
+    
+        channel.queue_bind.assert_called_once_with(
+            queue=config.rabbitmq.queue,
+            exchange=config.rabbitmq.exchange
+        )
+    
+    @pytest.mark.unit
+    def test_listener_subscribe_basic_qos(monkeypatch):
+        channel = pika.Channel()
+        channel.basic_qos = Mock()
+    
+        rabbitmq_adapter.listener.subscribe(channel, mocked_handler)
+    
+        channel.basic_qos.assert_called_once_with(prefetch_count=config.rabbitmq.prefetch.count)
+    
+    @pytest.mark.unit
+    def test_listener_subscribe_basic_consume(monkeypatch):
+        channel = pika.Channel()
+        channel.basic_consume = Mock()
+    
+        rabbitmq_adapter.listener.subscribe(channel, mocked_handler)
+    
+        channel.basic_consume.assert_called_once_with(
+            queue=config.rabbitmq.queue,
+            on_message_callback=mocked_handler
+        )
+
+разрабатываемый функционал `rabbitmq_adapter\listener.py`:
+
+    import sys
+    import os
+    
+    # sys.path.append(os.environ['CONFIG'])
+    from config import *
+    
+    def subscribe(
+        channel,
+        handler,
+        queue=config.rabbitmq.queue,
+        durable=config.rabbitmq.durable,
+        exchange=config.rabbitmq.exchange,
+        prefetch_count=config.rabbitmq.prefetch.count
+    ):
+        channel.queue_declare(queue=queue, durable=durable)
+        channel.queue_bind(queue=queue, exchange=exchange)
+        channel.basic_qos(prefetch_count=prefetch_count)
+        channel.basic_consume(queue=queue, on_message_callback=handler)
+
+Также надо уже настраивать импорты с разрабатываемого модуля `rabbitmq_adapter\__init__.py`:
+
+    import rabbitmq_adapter.channel
+    import rabbitmq_adapter.listener
+
+В тестовую конфигурацию `config\rabbitmq.yaml` добавляется строка с параметром `durable`:
+
+    test:
+      host: 'amqp://localhost'
+      exchange: 'amq.direct'
+      queue: 'TEST::NEW'
+      durable: True
+      prefetch:
+        count: 1
+
+И нам наконец становится нужным заглушка `tests\__mocks__\pika.py`, он начинает 
+приобретать неинтересные на момент тестирования части, если посмотреть на описанный
+выше тест, то становиться ясно что функционал `listener` надо проверять на работу,
+при этом интересен только вызов одного метода интерфейса, хотя конечно можно было
+проверять все сразу:
+
+    class Channel:
+        def __init__(self): pass
+        def exchange_declare(self): pass
+        def queue_declare(self, queue, durable): pass
+        def queue_bind(self, queue, exchange): pass
+        def basic_qos(self, prefetch_count): pass
+        def basic_consume(self, queue, on_message_callback): pass
+        def start_consuming(self): pass
+        def basic_publish(self): pass
+        def basic_ack(self): pass
+    
+    class Connection:
+        def __init__(self): pass
+        def channel(self): return Channel()
+        
+Обратите внимание на использование объекта `config` в по умолчанию параметрах 
+`listener.py`, насколько это удобно и практично. В простых приложениях наврняка
+параметры всегда будут по умолчанию т.е. те что описаны в конфигурационном файле,
+для более многопользовательских объект `config` можно сделать динамическим.
+только если `listener` используется два раза в одном приложении вероятно
+придется передавать параметры "программно", хотя это конечно мое первое впечатление.
+
+Что же реализуем следующий интеграционный тест:
+
+    ## .........
+    @pytest.mark.integration
+    def test_rabbitmq_listen_to_queue():
+        # Should be able to listen to a RabbitMQ queue
+        calls = []
+        rabbitmq_channel = rabbitmq_adapter.channel.create(config.rabbitmq.host)
+    
+        def mocked_handler(ch, method, props, body):
+            calls.append(1)
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+            ch.close()
+    
+        rabbitmq_adapter.listener.subscribe(rabbitmq_channel, mocked_handler, durable=False)
+        rabbitmq_channel.basic_publish(
+            exchange=config.rabbitmq.exchange,
+            routing_key=config.rabbitmq.queue,
+            body='MORTY'
+        )
+    
+        rabbitmq_channel.start_consuming()
+        wait_for_result(calls)
+    
+    ## .........
+
+Все работает, этот тест очень похож на предыдущий, добавлен только `listener.subscribe`.
+Автор отметил новый пункт заслуг:
+
+    Уметь слушать очередь, запускать функцию каждый раз, когда получает новое сообщение → (готово)
+    
 

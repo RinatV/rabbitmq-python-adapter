@@ -50,11 +50,28 @@ def test_rabbitmq_factory():
     )
 
     rabbitmq_channel.start_consuming()
-    # wait_for_result(calls)
+    wait_for_result(calls)
 
+@pytest.mark.integration
 def test_rabbitmq_listen_to_queue():
     # Should be able to listen to a RabbitMQ queue
-    assert True
+    calls = []
+    rabbitmq_channel = rabbitmq_adapter.channel.create(config.rabbitmq.host)
+
+    def mocked_handler(ch, method, props, body):
+        calls.append(1)
+        ch.basic_ack(delivery_tag=method.delivery_tag)
+        ch.close()
+
+    rabbitmq_adapter.listener.subscribe(rabbitmq_channel, mocked_handler, durable=False)
+    rabbitmq_channel.basic_publish(
+        exchange=config.rabbitmq.exchange,
+        routing_key=config.rabbitmq.queue,
+        body='MORTY'
+    )
+
+    rabbitmq_channel.start_consuming()
+    wait_for_result(calls)
 
 def test_rabbitmq_queue_one_to_many_queue_handler():
     # Should be able to have an one-to-many relationship between the queue and the handler function
