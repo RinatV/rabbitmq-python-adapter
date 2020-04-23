@@ -1,0 +1,6 @@
+test:
+  host: 'amqp://localhost'
+  exchange: 'amq.direct'
+  queue: 'TEST::NEW'
+  prefetch:
+    count: 1

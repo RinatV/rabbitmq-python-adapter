@@ -77,4 +77,177 @@
     dotmap
     pika
     
+Теперь напишем юнит-тест, т.е. тест который проверяет внутренний код разрабатываемого
+пакета `tests/test_channel.py``:
+
+    import pytest
+    import rabbitmq_adapter
+    import sys
+    import os
+    from unittest.mock import Mock
+    # from tests.__mocks__ import pika
     
+    # sys.path.append(os.environ['CONFIG'])
+    from config import *
+    
+    @pytest.mark.unit
+    def test_channel_sets_parameters(monkeypatch):
+        mocked_pika = Mock()
+        mocked_pika.URLParameters.return_value = 'MORTY'
+        monkeypatch.setattr('rabbitmq_adapter.channel.pika', mocked_pika)
+    
+        rabbitmq_adapter.channel.create('MORTY HOST')
+    
+        mocked_pika.URLParameters.assert_called_once_with('MORTY HOST')
+    
+    @pytest.mark.unit
+    def test_channel_creates_connection(monkeypatch):
+        mocked_pika = Mock()
+        mocked_pika.URLParameters.return_value = 'MORTY'
+        # mocked_pika.BlockingConnection.return_value = pika.Connection()
+        monkeypatch.setattr('rabbitmq_adapter.channel.pika', mocked_pika)
+    
+        rabbitmq_adapter.channel.create('MORTY HOST')
+    
+        mocked_pika.BlockingConnection.assert_called_once_with('MORTY')    
+    
+С помощью mockов - заглушек проверяется взаимодействие тестируемого кода
+с используемыми интерфейсами, для этого нет необходимости знать внутреннее устройство
+реализаций интерфейса, а достаточно проверять контракт. Остается разработать наш 
+класс адаптер `rabbitmq_adapter/channel.py`:
+
+    import pika
+    
+    def create(host):
+        params = pika.URLParameters(host)
+        # connection = pika.BlockingConnection(params)
+    
+        # return connection.channel()
+
+Первая строка метода `create` проверяется тестом `test_channel_sets_parameters(monkeypatch)`,
+следующая строка вторым юнит-тестом, возвращаемый объект видимо пригодится уже в 
+интеграционных тестах, с реальным сервером. Из исходной статьи на этом этапе пока не 
+используется файл `tests/__mocks__/pika.py` из теста у меня убрано его использование,
+тесты без этого пока тоже проходят, если коментить входные параметры, то тесты
+проваливаются, думаю выясним для чего нужны эти файлы в дальнейщем. Также закоменчена
+строка использования переменной среды `CONFIG`, т.к. пока она не вычисляется, и в ней
+нет необходимости.
+
+Зарядим первый интеграционный тест:
+
+    import pytest
+    import rabbitmq_adapter
+    import sys
+    import os
+    from time import sleep
+    
+    # sys.path.append(os.environ['CONFIG'])
+    from config import *
+    
+    def setup_listener(
+        channel,
+        on_message_callback,
+        queue=config.rabbitmq.queue,
+        exchange=config.rabbitmq.exchange,
+        durable=False,
+        prefetch_count=config.rabbitmq.prefetch.count
+    ):
+        channel.queue_declare(queue=queue, durable=durable)
+        channel.queue_bind(queue=queue, exchange=exchange)
+        channel.basic_qos(prefetch_count=prefetch_count)
+        channel.basic_consume(queue=queue, on_message_callback=on_message_callback)
+    
+        return channel
+    
+    def wait_for_result(
+        anchor,
+        tries=0,
+        retry_after=.6
+    ):
+        if len(anchor) > 0 or tries > 5: assert len(anchor) > 0
+        else:
+            sleep(retry_after)
+            return wait_for_result(anchor, tries + 1)
+    
+    @pytest.mark.integration
+    def test_rabbitmq_factory():
+        # Should be able to create a RabbitMQ connection
+        calls = []
+        def mocked_handler(ch, method, props, body):
+            calls.append(1)
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+            ch.close()
+    
+        rabbitmq_channel = rabbitmq_adapter.channel.create(config.rabbitmq.host)
+        rabbitmq_channel = setup_listener(rabbitmq_channel, mocked_handler)
+        rabbitmq_channel.basic_publish(
+            exchange=config.rabbitmq.exchange,
+            routing_key=config.rabbitmq.queue,
+            body='MORTY'
+        )
+    
+        rabbitmq_channel.start_consuming()
+        # wait_for_result(calls)
+    
+    def test_rabbitmq_listen_to_queue():
+        # Should be able to listen to a RabbitMQ queue
+        assert True
+    
+    def test_rabbitmq_queue_one_to_many_queue_handler():
+        # Should be able to have an one-to-many relationship between the queue and the handler function
+        assert True
+    
+    def test_rabbitmq_send_message():
+        # Should be able to send a message in a given queue
+        assert True
+     
+Пока файл `config/config.py` пустой Pycharm на это будет ругаться, заполним файл:
+
+    import os
+    import yaml
+    from pathlib import Path
+    from dotmap import DotMap
+    
+    def load_only_current_env(config):
+        configs = yaml.load(config)
+        return configs[os.environ['ENV']]
+    
+    config_files = [os.path.join(r, file) for r, d, f in os.walk(os.environ['CONFIG']) for file in f if '.yaml' in file]
+    config = DotMap({Path(cfg).stem: load_only_current_env(open(cfg, 'r')) for cfg in config_files})
+
+Вот сейчас нам становиться нужна переменная среды `CONFIG, для этого заведем файл 
+`pytest.ini`
+
+    [pytest]
+    markers =
+      integration
+      unit
+    env =
+      ENV=test
+      CONFIG={PWD}/config/
+  
+ Сейчас уже становится нужным переменная среды `PWD`, его конечно можно заменить в
+ конфигурационном файле `CONFIG=../config/` будет работать, я же его прописал
+ в конфигурацию запуска тестов Pycharm `PWD=..`.
+ 
+ Чтобы тесты могли видеть настройки для соединения с сервером заполним файл
+ `rabbitmq.yaml`, rabbitmq у меня локальный:
+ 
+    test:
+      host: 'amqp://localhost'
+      exchange: 'amq.direct'
+      queue: 'TEST::NEW'
+      prefetch:
+        count: 1
+        
+После того как в файле `rabbitmq_adapter/channel.py` были раскоменченные все
+строки, интеграционный тест прошел. Если сервер остановить, то тест проваливается.
+Строку `wait_for_result(calls)` я тоже закоментировал, тест работает также как и
+работал.
+
+Пока наблюдения такие:
+ * Можем проверить правильно ли используем интерфейсы
+ * Каким-то образом устанавливаем соединение, на сервере появляется очередь `TEST:NEW`
+
+Посмотрим далее.
+
